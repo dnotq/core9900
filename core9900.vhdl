@@ -17,25 +17,39 @@ use ieee.std_logic_unsigned.all;
 
 entity core9900 is
    port (
-      clk_i          : in  std_logic;     -- clock
-      clk_en_i       : in  std_logic;     -- clock enable
-      rst_n_i        : in  std_logic;     -- reset and load PC, active low
-   -- Address and data bus
-      addr_o         : out std_logic_vector(0 to 15);
-      data_o         : out std_logic_vector(0 to 15);
-      data_i         : in  std_logic_vector(0 to 15);
-      rw_n_o         : out std_logic;     -- read !write
-
+      clk_i          : in  std_logic;
+      reset_n_i      : in  std_logic;                    -- active low, load WP from >0000 and PC from >0002
+      load_n_i       : in  std_logic;                    -- active low, load WP from >FFFC and PC from >FFFE
+      hold_n_i       : in  std_logic;                    -- active low, external hold request for bus control
+      holda_o        : out std_logic;                    -- active high, acknowledge the hold_n request
+      ready_i        : in  std_logic;                    -- active high, memory will be ready for read/write during the next cycle
+      wait_o         : out std_logic;                    -- active high, indicates the 9900 is in a wait-state due to ready being low
+      iaq_o          : out std_logic;                    -- active high, indicates the 9900 is fetching an instruction
+   -- Memory interface
+      bsel_n_o       : out std_logic_vector(0 to 1);     -- 11=read, 01=MSB write, 10=LSB write, 00=WORD write
+      addr_o         : out std_logic_vector(0 to 15);    -- A0 = MSbit
+      din_i          : in  std_logic_vector(0 to 15);    -- D0 = MSbit
+      dout_o         : out std_logic_vector(0 to 15);    -- D0 = MSbit
+      we_n_o         : out std_logic;                    -- active low
+      dbin_o         : out std_logic;                    -- active high when reading the data bus
+      memen_n_o      : out std_logic;                    -- active low, indicates addr contains a valid memory address
+   -- CRU interface
+      cruclk_o       : out std_logic;                    -- active high, cruout is valid or A0-A2 should be decoded
+      cruout_o       : out std_logic;                    -- CRU data out, valid when cruclk goes high
+      cruin_i        : in  std_logic;                    -- CRU data in. A3-A14 specify the external bit to be sampled
+   -- Interrupt interface
+      intreq_n_i     : in  std_logic;                    -- active low, loads interrupt code from ic0-ic3
+      ic_i           : in  std_logic_vector(0 to 3)      -- IC0 = MSbit, LLLH=highest priority, HHHH=lowest priority
    );
-end f18a_gpu;
+end core9900;
 
-architecture rtl of f18a_gpu is
+architecture rtl of core9900 is
 
    -- Signals
 
 begin
 
-   -- Unsiged 32 / 16 Divider
+   -- Unsigned 32 / 16 Divider
    inst_divide : entity work.div32x16
    port map (
       clk_i          => clk_i,

@@ -35,26 +35,28 @@ end div32x16;
 architecture rtl of div32x16 is
 
    type div_state_t is (st_idle, st_op, st_done);
-   signal div_state : div_state_t;
+   signal state_r : div_state_t;
+   signal state_x : div_state_t;
 
-   signal rl      : std_logic_vector(0 to 15);           -- dividend lo 16-bits
-   signal rh      : unsigned(0 to 15);                   -- dividend hi 16-bits
-   signal msb     : std_logic;                           -- shifted msb of dividend for 17-bit subtraction
+   signal rl_r, rl_x          : std_logic_vector(0 to 15);     -- dividend lo 16-bits
+   signal rh_r, rh_x          : std_logic_vector(0 to 15);     -- dividend hi 16-bits
+   signal msb_r, msb_x        : std_logic;                     -- shifted msb of dividend for 17-bit subtraction
    signal diff    : unsigned(0 to 15);                   -- quotient - divisor difference
    signal sub17   : unsigned(0 to 16);                   -- 17-bit subtraction
    signal q_bit   : std_logic;                           -- quotient bit
    signal d       : unsigned(0 to 15);                   -- divisor register
-   signal count   : integer range 0 to 15;               -- 0 to 15 counter
-   signal rdy     : std_logic;
-   signal dne     : std_logic;
+   signal count_r, count_x    : integer range 0 to 15;         -- 0 to 15 counter
+   signal rdy_r, rdy_x        : std_logic;
+   signal dne_r, dne_x        : std_logic;
 
 begin
 
-   -- Quotient and remainder will never be more than 16-bit.
-   q <= rl;
-   r <= std_logic_vector(rh);
-   ready <= rdy;
-   done <= dne;
+   -- Registered outputs.
+   -- The quotient and remainder will never be more than 16-bit.
+   q_o      <= rl_r;
+   r_o      <= rh_r;
+   ready_o  <= rdy_r;
+   done_o   <= dne_r;
 
    -- Compare and subtract to derive each quotient bit.
    sub17 <= (msb & rh) - ('0' & d);
@@ -131,4 +133,3 @@ begin
    end if; end process;
 
 end rtl;
-
