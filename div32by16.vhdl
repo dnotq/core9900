@@ -188,7 +188,7 @@ begin
    end process;
 
    -- Register Transfer.
-   process (clk) begin if rising_edge(clk) then
+   process (clk_i) begin if rising_edge(clk_i) then
       if reset_i = '1' then
          state_r <= ST_IDLE;
       else
@@ -199,8 +199,8 @@ begin
          rh_r     <= rh_x;
          msb_r    <= msb_x;
          rdy_r    <= rdy_x; 
-         dne_r    <= rdy_x; 
-         cnt_r    <= rdy_x;
+         dne_r    <= dne_x; 
+         cnt_r    <= cnt_x;
 
       end if;
    end if; end process;
