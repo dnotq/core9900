@@ -45,7 +45,21 @@ end core9900;
 
 architecture rtl of core9900 is
 
-   -- Signals
+   -- Instruction Fields
+   signal byte_s                    : std_logic;                     -- byte selector
+   signal Td_s                      : std_logic_vector(0 to 1);      -- destination mode: Td
+   signal Dc_s                      : std_logic_vector(0 to 3);      -- destination: D or C
+   signal Ts_s                      : std_logic_vector(0 to 1);      -- source mode: Ts
+   signal Sw_s                      : std_logic_vector(0 to 3);      -- source: S or W
+   signal C_s                       : std_logic_vector(0 to 3);      -- count: C
+   signal jmp_disp_s                : std_logic_vector(0 to 7);      -- jump displacement
+   signal Rn_s                      : std_logic_vector(0 to 3);      -- selected register
+
+   -- Control Signals
+   signal ctl_wp_sel_s              : std_logic := '0';              -- workspace pointer select
+
+   -- Data Path
+   signal wp_reg_addr_s             : std_logic_vector(0 to 15);
 
 begin
 
@@ -64,6 +78,39 @@ begin
       r_o            => div_rmd
    );
 
+   
+   -- Decoder and Control
+   inst_decode : entity work.decode
+   port map (
+      clk_i          => clk_i,
+      reset_i        => div_reset,     -- active high, forces divider idle
+      start_i        => div_start,     -- '1' to load and trigger the divide
+      ready_o        => open,          -- '1' when ready, '0' while dividing
+      done_o         => div_done,      -- single done tick
+      dividend_msb_i => dst_oper,      -- number being divided (dividend) 0 to 4,294,967,295
+      dividend_lsb_i => ws_dout,
+      divisor_i      => src_oper,      -- divisor 0 to 65,535
+      q_o            => div_quo,
+      r_o            => div_rmd
+   );
 
+
+   
+   
+   -- Data Paths
+   
+   -- Workspace Pointer control decode and next state value.
+   WorkspacePointer : process (ctl_wp_sel_s, wp_r, din_i)
+   begin
+      case ctl_wp_sel_s is
+      when WP_DIN    => wp_x <= din_i;
+      when others    => wp_x <= wp_r;
+      end case;
+   end process;
+
+   -- Dedicated adder for register addressing.
+   wp_reg_addr_s <= wp_r + ("00000000000" & Rn_s & "0");
+
+   
 end rtl;
 

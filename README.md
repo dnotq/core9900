@@ -13,7 +13,6 @@ Differences from a real 9900:
 
 
 Signal Prefix / Suffix Reference:
-  * `st_`   Defined-type enumerated state
   * `_rt`   Defined record type
   * `_t`    Defined type
   * `_i`    Module input
