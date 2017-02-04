@@ -43,15 +43,17 @@ architecture rtl of decode is
    constant MEMCYCLE_COUNT          : std_logic_vector(0 to 4) := "00001";
 
    -- Microcode constants
-   constant Y                       : std_logic := '1';
-   constant N                       : std_logic := '0';
-   constant MCODE_JMP               : std_logic := '1';
+   constant EN_n                    : std_logic := '0';  -- Enable low
+   constant ENBL                    : std_logic := '1';  -- Enable high
+   constant nop                     : std_logic := '0';  -- No-Op, inactive low
+   constant nop_n                   : std_logic := '1';  -- No-Op, inactive high
+   constant MCODE_BRA               : std_logic := '1';
    constant MCODE_RET               : std_logic := '1';
    constant NEXT_OP                 : std_logic_vector(0 to 9)  := "0000000000";
    constant RET_OP                  : std_logic_vector(0 to 9)  := "0000000001";
    constant BRA_RESET_VEC           : std_logic_vector(0 to 9)  := "1000000000";
    constant BRA_FETCH_VEC           : std_logic_vector(0 to 9)  := "1000000100";
-   constant UNUSED                  : std_logic_vector(0 to 25) := "00000000000000000000000000";
+   constant UNUSED                  : std_logic_vector(0 to 21) := "0000000000000000000000";
 
    -- Microcode ROM 512x36 (18Kbits block RAM)
    type microcode_t is array (0 to 511) of std_logic_vector(0 to 35);
@@ -63,30 +65,37 @@ architecture rtl of decode is
    --          1 : Jump to absolute address, push current address on microcode stack
    -- 27..35 : 9-bits microcode address
    --
-   --         ADDR/OP
    -- reset op:
-      UNUSED & NEXT_OP,
-      UNUSED & NEXT_OP,
-      UNUSED & BRA_FETCH_VEC,
-      UNUSED & BRA_RESET_VEC,
+   -- RESET   LOAD   !MEMEN     !WE                ADDR/OP
+       nop  &  nop &   EN_n  & nop_n &  UNUSED  &  NEXT_OP,
+       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  NEXT_OP,
+       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  BRA_FETCH_VEC,
+       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  BRA_RESET_VEC,
 
    -- init op:
 
    -- fetch op:
-      UNUSED & NEXT_OP,
-      UNUSED & RET_OP,
+   -- RESET   LOAD   !MEMEN     !WE                ADDR/OP
+       nop  &  nop &  EN_n   &  EN_n &  UNUSED  &  NEXT_OP,
+       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  RET_OP,
 
    -- jump to reset:
-      UNUSED & BRA_RESET_VEC,
+   -- RESET   LOAD   !MEMEN     !WE                ADDR/OP
+       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  BRA_RESET_VEC,
       others => (others => '0')
    );
 
    -- Microcode control
+   signal ctl_memen_n_s                : std_logic;                  -- Memory Enable, active low
+   signal ctl_we_n_s                   : std_logic;                  -- Write Enable, active low
+
    signal ctl_mcode_addr_type_s        : std_logic;                  -- Type of microcode address
    signal ctl_mcode_addr_next_s        : std_logic_vector(0 to 8);   -- Next microcode address
+   signal mcode_out_s                  : std_logic_vector(0 to 35);  -- Microcode output word
+
+   signal mcode_en_s                   : std_logic;                  -- Microcode address enable
    signal mcode_r, mcode_x             : std_logic_vector(0 to 8);   -- Microcode address
    signal mcode_stack_r, mcode_stack_x : std_logic_vector(0 to 8);   -- One-address stack
-   signal mcode_out_r                  : std_logic_vector(0 to 35) := x"000000000";
 
 
    -- Memory cycle FSM
@@ -99,10 +108,6 @@ architecture rtl of decode is
    signal dbin_r, dbin_x               : std_logic;
    signal we_n_r, we_n_x               : std_logic;
 
-
-   -- TODO temporary signals, replace and delete.
-   signal fake_op_r, fake_op_x : std_logic;
-   signal start_memcycle_s : std_logic;
 
 begin
 
@@ -121,10 +126,11 @@ begin
    -- 7 ctrl   0   0   0   0   0   0   1 | opcode & immd | X |       W       |
    --
    -- The stack format is new for added opcodes.  The original four shift
-   -- opcodes have a '0' in bit-5, but have 3-bits for the instruction
-   -- selection.  So, using bit-5 as a '1' allows detection of the new
-   -- instructions and modifies the remaining bits to specify the src or
-   -- dst of the operation, since the stack always works with R15.
+   -- opcodes have a 3-bit opcode, but only two-bits are needed to select
+   -- the shift operation.  Therefore bit-5 is always '0'.  Setting bit-5
+   -- to a '1' allows detection of the new instructions and modifies the
+   -- remaining bits to specify the src or dst of the operation, since the
+   -- stack always works with R15.
 
 
 --   ctl_wp_sel_s_o <=
@@ -165,18 +171,27 @@ begin
 
       else
 
-         -- Synchronous BRAM microcode read.  Accessed every cycle.
-         mcode_out_r    <= microcode(to_integer(unsigned(mcode_x)));
-         mcode_r        <= mcode_x;
-         mcode_stack_r  <= mcode_stack_x;
+         if mcode_en_s = ENBL then
+            mcode_r        <= mcode_x;
+            mcode_stack_r  <= mcode_stack_x;
+         end if;
 
       end if;
    end if;
    end process;
 
+   -- Infer Block RAM with unregistered output.  Should not infer RAM on LUTs
+   -- because the address is registered.
+   -- Microcode read.  Accessed every cycle.
+   mcode_out_s <= microcode(to_integer(unsigned(mcode_r)));
 
-   ctl_mcode_addr_type_s     <= mcode_out_r(26);
-   ctl_mcode_addr_next_s     <= mcode_out_r(27 to 35);
+   ctl_memen_n_s              <= mcode_out_s(2);
+   ctl_we_n_s                 <= mcode_out_s(3);
+   ctl_mcode_addr_type_s      <= mcode_out_s(26);
+   ctl_mcode_addr_next_s      <= mcode_out_s(27 to 35);
+
+   -- Disable the microcode address register during a memory cycle.
+   mcode_en_s <= ctl_memen_n_s when cycle_cnt_x /= 0 else ENBL;
 
    -- Microcode next state logic
    --
@@ -191,7 +206,7 @@ begin
 
 
       -- Test for microcode absolute address branch.
-      if ctl_mcode_addr_type_s = MCODE_JMP then
+      if ctl_mcode_addr_type_s = MCODE_BRA then
          mcode_x <= ctl_mcode_addr_next_s;
          -- Store the return address as the next microcode instruction after
          -- the branch instruction.
@@ -219,11 +234,9 @@ begin
 
          memcycle_r  <= MEM_SELECT;
          cycle_cnt_r <= MEMCYCLE_COUNT;
-         memen_n_r   <= '1';
-         dbin_r      <= '0';
-         we_n_r      <= '1';
-
-         fake_op_r   <= '0';
+         memen_n_r   <= nop_n;
+         dbin_r      <= nop;
+         we_n_r      <= nop_n;
 
       else
 
@@ -233,59 +246,52 @@ begin
          dbin_r      <= dbin_x;
          we_n_r      <= we_n_x;
 
-         fake_op_r   <= fake_op_x;
-
       end if;
    end if;
    end process;
 
-   start_memcycle_s <= '1';
 
    -- Memory cycle next state logic
    --
    MemoryCycle :
-   process (memcycle_r, cycle_cnt_r, memen_n_r, dbin_r, we_n_r, fake_op_r, start_memcycle_s)
+   process (memcycle_r, cycle_cnt_r, memen_n_r, dbin_r, we_n_r, ctl_memen_n_s, ctl_we_n_s)
    begin
 
       memcycle_x  <= memcycle_r;
-      cycle_cnt_x <= cycle_cnt_r - 1;
+      cycle_cnt_x <= cycle_cnt_r;
       memen_n_x   <= memen_n_r;
       dbin_x      <= dbin_r;
       we_n_x      <= we_n_r;
 
-      fake_op_x   <= fake_op_r;
+      if MEMCYCLE_COUNT > 0 then
+         cycle_cnt_x <= cycle_cnt_r - 1;
+      end if;
 
+      
       case memcycle_r is
 
       when MEM_SELECT =>
 
          cycle_cnt_x <= MEMCYCLE_COUNT;
 
-         if start_memcycle_s = '1' then
+         if ctl_memen_n_s = EN_n then
 
-            memcycle_x <= MEM_CYCLE;
-            memen_n_x <= '0';
+            memcycle_x  <= MEM_CYCLE;
+            memen_n_x   <= ctl_memen_n_s;
+            we_n_x      <= ctl_we_n_s;
+            dbin_x      <= ctl_we_n_s;
 
-            if fake_op_r = '0' then
-               dbin_x <= '0';
-               we_n_x <= '0';
-            else
-               dbin_x <= '1';
-               we_n_x <= '1';
-            end if;
          end if;
 
       when MEM_CYCLE =>
 
          if cycle_cnt_r = 0 then
 
-            memcycle_x <= MEM_SELECT;
-            memen_n_x   <= '1';
-            dbin_x      <= '0';
-            we_n_x      <= '1';
+            memcycle_x  <= MEM_SELECT;
+            memen_n_x   <= nop_n;
+            dbin_x      <= nop;
+            we_n_x      <= nop_n;
 
-
-            fake_op_x <= not fake_op_r;
          end if;
 
       end case;
