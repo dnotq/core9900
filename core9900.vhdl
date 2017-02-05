@@ -7,6 +7,16 @@
 -- @date Dec 8, 2016
 --
 -- TMS9900 CPU Core
+--
+-- Notes:
+--
+-- If used in a real system with external signals, it is up to the implementor to
+-- synchronize inputs to the clock as necessary.
+--
+-- clk_i must be 100MHz.
+--
+-- ready_i is not available if MEMCYCLE_COUNT is 0 (10ns memory cycle).  Otherwise it must
+-- be active 10ns before the end of a memory cycle.
 
 
 library ieee;
@@ -16,6 +26,9 @@ use ieee.std_logic_unsigned.all;
 
 
 entity core9900 is
+   generic (
+      MEMCYCLE_COUNT : natural range 1 to 100 := 33      -- One memory cycle in 10ns counts
+   );
    port (
       clk_i          : in  std_logic;
       reset_n_i      : in  std_logic;                    -- active low, load WP from >0000 and PC from >0002
@@ -63,54 +76,58 @@ architecture rtl of core9900 is
 
 begin
 
-   -- Unsigned 32 / 16 Divider
-   inst_divide : entity work.div32x16
-   port map (
-      clk_i          => clk_i,
-      reset_i        => div_reset,     -- active high, forces divider idle
-      start_i        => div_start,     -- '1' to load and trigger the divide
-      ready_o        => open,          -- '1' when ready, '0' while dividing
-      done_o         => div_done,      -- single done tick
-      dividend_msb_i => dst_oper,      -- number being divided (dividend) 0 to 4,294,967,295
-      dividend_lsb_i => ws_dout,
-      divisor_i      => src_oper,      -- divisor 0 to 65,535
-      q_o            => div_quo,
-      r_o            => div_rmd
-   );
-
-   
    -- Decoder and Control
    inst_decode : entity work.decode
+   generic map (
+      MEMCYCLE_COUNT => MEMCYCLE_COUNT
+   )
    port map (
       clk_i          => clk_i,
-      reset_i        => div_reset,     -- active high, forces divider idle
-      start_i        => div_start,     -- '1' to load and trigger the divide
-      ready_o        => open,          -- '1' when ready, '0' while dividing
-      done_o         => div_done,      -- single done tick
-      dividend_msb_i => dst_oper,      -- number being divided (dividend) 0 to 4,294,967,295
-      dividend_lsb_i => ws_dout,
-      divisor_i      => src_oper,      -- divisor 0 to 65,535
-      q_o            => div_quo,
-      r_o            => div_rmd
+      reset_n_i      => reset_n_i,        -- active low
+      ready_i        => ready_i,          -- active high, memory will be ready for read/write during the next cycle
+      wait_o         => wait_o,           -- active high, indicates the 9900 is in a wait-state due to ready being low
+      iaq_o          => iaq_o,            -- active high, indicates the 9900 is fetching an instruction
+
+      -- External memory interface
+      we_n_o         => we_n_o,           -- active low
+      dbin_o         => dbin_o,           -- active high when reading the data bus
+      memen_n_o      => memen_n_o,        -- active low, indicates addr contains a valid memory address
+
+      -- Internal control signals
+      ctl_wp_sel_s_o => ctl_wp_sel_s
    );
 
 
-   
-   
+
+
    -- Data Paths
-   
+
    -- Workspace Pointer control decode and next state value.
-   WorkspacePointer : process (ctl_wp_sel_s, wp_r, din_i)
-   begin
-      case ctl_wp_sel_s is
-      when WP_DIN    => wp_x <= din_i;
-      when others    => wp_x <= wp_r;
-      end case;
-   end process;
+   -- WorkspacePointer : process (ctl_wp_sel_s, wp_r, din_i)
+   -- begin
+      -- case ctl_wp_sel_s is
+      -- when WP_DIN    => wp_x <= din_i;
+      -- when others    => wp_x <= wp_r;
+      -- end case;
+   -- end process;
 
-   -- Dedicated adder for register addressing.
-   wp_reg_addr_s <= wp_r + ("00000000000" & Rn_s & "0");
+   -- -- Dedicated adder for register addressing.
+   -- wp_reg_addr_s <= wp_r + ("00000000000" & Rn_s & "0");
 
-   
+   -- Unsigned 32 / 16 Divider
+   -- inst_divide : entity work.div32x16
+   -- port map (
+      -- clk_i          => clk_i,
+      -- reset_i        => div_reset,     -- active high, forces divider idle
+      -- start_i        => div_start,     -- '1' to load and trigger the divide
+      -- ready_o        => open,          -- '1' when ready, '0' while dividing
+      -- done_o         => div_done,      -- single done tick
+      -- dividend_msb_i => dst_oper,      -- number being divided (dividend) 0 to 4,294,967,295
+      -- dividend_lsb_i => ws_dout,
+      -- divisor_i      => src_oper,      -- divisor 0 to 65,535
+      -- q_o            => div_quo,
+      -- r_o            => div_rmd
+   -- );
+
 end rtl;
 

@@ -18,33 +18,48 @@ use ieee.std_logic_unsigned.all;
 
 
 entity decode is
+   generic (
+      MEMCYCLE_COUNT : natural range 1 to 100 := 33      -- One memory cycle in 10ns counts
+   );
    port (
       clk_i          : in  std_logic;
       reset_n_i      : in  std_logic;                    -- active low
+      ready_i        : in  std_logic;                    -- active high, memory will be ready for read/write during the next cycle
+      wait_o         : out std_logic;                    -- active high, indicates the 9900 is in a wait-state due to ready being low
+      iaq_o          : out std_logic;                    -- active high, indicates the 9900 is fetching an instruction
+      
+   -- Memory interface
+--      bsel_n_o       : out std_logic_vector(0 to 1);     -- 11=read, 01=MSB write, 10=LSB write, 00=WORD write
+--      addr_o         : out std_logic_vector(0 to 15);    -- A0 = MSbit
+--      din_i          : in  std_logic_vector(0 to 15);    -- D0 = MSbit
+--      dout_o         : out std_logic_vector(0 to 15);    -- D0 = MSbit
+      we_n_o         : out std_logic;                    -- active low
+      dbin_o         : out std_logic;                    -- active high when reading the data bus
+      memen_n_o      : out std_logic;                    -- active low, indicates addr contains a valid memory address
 
-      ir_r_i         : in  std_logic_vector(0 to 15);    -- Instruction Register
+      -- ir_r_i         : in  std_logic_vector(0 to 15);    -- Instruction Register
 
-      byte_s_o       : out std_logic;                    -- byte selector
-      Td_s_o         : out std_logic_vector(0 to 1);     -- destination mode: Td
-      Dc_s_o         : out std_logic_vector(0 to 3);     -- destination: D or C
-      Ts_s_o         : out std_logic_vector(0 to 1);     -- source mode: Ts
-      Sw_s_o         : out std_logic_vector(0 to 3);     -- source: S or W
-      C_s_o          : out std_logic_vector(0 to 3);     -- count: C
-      jmp_disp_s_o   : out std_logic_vector(0 to 7);     -- jump displacement
-      Rn_s_o         : out std_logic_vector(0 to 3);     -- selected register
+      -- byte_s_o       : out std_logic;                    -- byte selector
+      -- Td_s_o         : out std_logic_vector(0 to 1);     -- destination mode: Td
+      -- Dc_s_o         : out std_logic_vector(0 to 3);     -- destination: D or C
+      -- Ts_s_o         : out std_logic_vector(0 to 1);     -- source mode: Ts
+      -- Sw_s_o         : out std_logic_vector(0 to 3);     -- source: S or W
+      -- C_s_o          : out std_logic_vector(0 to 3);     -- count: C
+      -- jmp_disp_s_o   : out std_logic_vector(0 to 7);     -- jump displacement
+      -- Rn_s_o         : out std_logic_vector(0 to 3);     -- selected register
 
+      -- Internal control signals
       ctl_wp_sel_s_o : out std_logic                     -- workspace register select
    );
 end decode;
 
 architecture rtl of decode is
 
-   -- TODO convert to input generic, default to '00000'
-   constant MEMCYCLE_COUNT          : std_logic_vector(0 to 4) := "00001";
+   constant MEMCYC_CNT              : std_logic_vector(0 to 6) := std_logic_vector(to_unsigned(MEMCYCLE_COUNT-1, 7));
 
    -- Microcode constants
    constant EN_n                    : std_logic := '0';  -- Enable low
-   constant ENBL                    : std_logic := '1';  -- Enable high
+   constant ENA                     : std_logic := '1';  -- Enable high
    constant nop                     : std_logic := '0';  -- No-Op, inactive low
    constant nop_n                   : std_logic := '1';  -- No-Op, inactive high
    constant MCODE_BRA               : std_logic := '1';
@@ -53,7 +68,7 @@ architecture rtl of decode is
    constant RET_OP                  : std_logic_vector(0 to 9)  := "0000000001";
    constant BRA_RESET_VEC           : std_logic_vector(0 to 9)  := "1000000000";
    constant BRA_FETCH_VEC           : std_logic_vector(0 to 9)  := "1000000100";
-   constant UNUSED                  : std_logic_vector(0 to 21) := "0000000000000000000000";
+   constant UNUSED                  : std_logic_vector(0 to 20) := "000000000000000000000";
 
    -- Microcode ROM 512x36 (18Kbits block RAM)
    type microcode_t is array (0 to 511) of std_logic_vector(0 to 35);
@@ -66,28 +81,29 @@ architecture rtl of decode is
    -- 27..35 : 9-bits microcode address
    --
    -- reset op:
-   -- RESET   LOAD   !MEMEN     !WE                ADDR/OP
-       nop  &  nop &   EN_n  & nop_n &  UNUSED  &  NEXT_OP,
-       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  NEXT_OP,
-       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  BRA_FETCH_VEC,
-       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  BRA_RESET_VEC,
+   -- RESET   LOAD   !MEMEN     !WE    IAQ            ADDR/OP
+       nop  &  nop &  EN_n   &  EN_n & nop & UNUSED & NEXT_OP,
+       nop  &  nop &  nop_n  & nop_n & nop & UNUSED & NEXT_OP,
+       nop  &  nop &  nop_n  & nop_n & nop & UNUSED & BRA_FETCH_VEC,
+       nop  &  nop &  nop_n  & nop_n & nop & UNUSED & BRA_RESET_VEC,
 
    -- init op:
 
    -- fetch op:
-   -- RESET   LOAD   !MEMEN     !WE                ADDR/OP
-       nop  &  nop &  EN_n   &  EN_n &  UNUSED  &  NEXT_OP,
-       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  RET_OP,
+   -- RESET   LOAD   !MEMEN     !WE    IAQ            ADDR/OP
+       nop  &  nop &   EN_n  & nop_n & ENA & UNUSED & NEXT_OP,
+       nop  &  nop &  nop_n  & nop_n & nop & UNUSED & RET_OP,
 
    -- jump to reset:
-   -- RESET   LOAD   !MEMEN     !WE                ADDR/OP
-       nop  &  nop &  nop_n  & nop_n &  UNUSED  &  BRA_RESET_VEC,
+   -- RESET   LOAD   !MEMEN     !WE    IAQ            ADDR/OP
+       nop  &  nop &  nop_n  & nop_n & nop & UNUSED & BRA_RESET_VEC,
       others => (others => '0')
    );
 
    -- Microcode control
    signal ctl_memen_n_s                : std_logic;                  -- Memory Enable, active low
    signal ctl_we_n_s                   : std_logic;                  -- Write Enable, active low
+   signal ctl_iaq_s                    : std_logic;                  -- Instruction Acquisition, active high
 
    signal ctl_mcode_addr_type_s        : std_logic;                  -- Type of microcode address
    signal ctl_mcode_addr_next_s        : std_logic_vector(0 to 8);   -- Next microcode address
@@ -101,16 +117,30 @@ architecture rtl of decode is
    -- Memory cycle FSM
    type memory_t is (MEM_SELECT, MEM_CYCLE);
    signal memcycle_r, memcycle_x       : memory_t;                   -- Memory cycle state
-   signal cycle_cnt_r, cycle_cnt_x     : std_logic_vector(0 to 4);   -- Memory cycle counter
+   signal cycle_cnt_r, cycle_cnt_x     : std_logic_vector(0 to 6);   -- Memory cycle counter
 
    -- Memory control signals, registered
    signal memen_n_r, memen_n_x         : std_logic;
    signal dbin_r, dbin_x               : std_logic;
    signal we_n_r, we_n_x               : std_logic;
+   signal iaq_r, iaq_x                 : std_logic;
+   signal wait_r, wait_x               : std_logic;                  -- Registers mcode_en_s for the wait signal
 
 
 begin
 
+
+   -- Internal control output signals.
+   ctl_wp_sel_s_o <= mcode_out_s(2);
+
+   -- Registered memory signals suitable to drive real external memories.
+   iaq_o          <= iaq_r;               -- active high, indicates the 9900 is fetching an instruction
+   we_n_o         <= we_n_r;              -- active low
+   dbin_o         <= dbin_r;              -- active high when reading the data bus
+   memen_n_o      <= memen_n_r;           -- active low, indicates addr contains a valid memory address
+   wait_o         <= wait_r;              -- active high, indicates the 9900 is in a wait-state due to ready being low 
+
+   
    -- Opcode Formats
    --
    --          0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |10 |11 |12 |13 |14 |15 |
@@ -133,7 +163,6 @@ begin
    -- stack always works with R15.
 
 
---   ctl_wp_sel_s_o <=
 
    -- The byte operator only exists in 8 instructions and is always bit 3.
 --   byte_s_o       <= ir_r_i(3);           -- byte selector
@@ -159,6 +188,7 @@ begin
 --      end case;
 --   end process;
 
+
    -- Microcode FSM register transfer
    --
    MicrocodeRT :
@@ -171,7 +201,7 @@ begin
 
       else
 
-         if mcode_en_s = ENBL then
+         if mcode_en_s = ENA then
             mcode_r        <= mcode_x;
             mcode_stack_r  <= mcode_stack_x;
          end if;
@@ -185,13 +215,15 @@ begin
    -- Microcode read.  Accessed every cycle.
    mcode_out_s <= microcode(to_integer(unsigned(mcode_r)));
 
+   -- Microcode signal distribution.  Signal names for convenience.
    ctl_memen_n_s              <= mcode_out_s(2);
    ctl_we_n_s                 <= mcode_out_s(3);
+   ctl_iaq_s                  <= mcode_out_s(4);
    ctl_mcode_addr_type_s      <= mcode_out_s(26);
    ctl_mcode_addr_next_s      <= mcode_out_s(27 to 35);
 
    -- Disable the microcode address register during a memory cycle.
-   mcode_en_s <= ctl_memen_n_s when cycle_cnt_x /= 0 else ENBL;
+   mcode_en_s <= ctl_memen_n_s when cycle_cnt_x /= 0 else ENA;
 
    -- Microcode next state logic
    --
@@ -233,10 +265,11 @@ begin
       if reset_n_i = '0' then
 
          memcycle_r  <= MEM_SELECT;
-         cycle_cnt_r <= MEMCYCLE_COUNT;
+         cycle_cnt_r <= MEMCYC_CNT;
          memen_n_r   <= nop_n;
          dbin_r      <= nop;
          we_n_r      <= nop_n;
+         iaq_r       <= nop;
 
       else
 
@@ -245,16 +278,22 @@ begin
          memen_n_r   <= memen_n_x;
          dbin_r      <= dbin_x;
          we_n_r      <= we_n_x;
+         iaq_r       <= iaq_x;
+         wait_r      <= wait_x;
 
       end if;
    end if;
    end process;
 
+   -- Wait output when microcode addressing is paused and ready in low.
+   wait_x <= not (mcode_en_s or ready_i);
 
    -- Memory cycle next state logic
    --
    MemoryCycle :
-   process (memcycle_r, cycle_cnt_r, memen_n_r, dbin_r, we_n_r, ctl_memen_n_s, ctl_we_n_s)
+   process (memcycle_r, cycle_cnt_r, memen_n_r, dbin_r, we_n_r,
+            ctl_memen_n_s, ctl_we_n_s, ctl_iaq_s,
+            ready_i)
    begin
 
       memcycle_x  <= memcycle_r;
@@ -262,8 +301,11 @@ begin
       memen_n_x   <= memen_n_r;
       dbin_x      <= dbin_r;
       we_n_x      <= we_n_r;
+      iaq_x       <= iaq_r;
 
-      if MEMCYCLE_COUNT > 0 then
+      -- Hold the counter if the ready input goes low, but only if
+      -- there are enough counts per memory cycle.
+      if MEMCYC_CNT > 0 and ready_i = '1' then
          cycle_cnt_x <= cycle_cnt_r - 1;
       end if;
 
@@ -272,7 +314,7 @@ begin
 
       when MEM_SELECT =>
 
-         cycle_cnt_x <= MEMCYCLE_COUNT;
+         cycle_cnt_x <= MEMCYC_CNT;
 
          if ctl_memen_n_s = EN_n then
 
@@ -280,6 +322,7 @@ begin
             memen_n_x   <= ctl_memen_n_s;
             we_n_x      <= ctl_we_n_s;
             dbin_x      <= ctl_we_n_s;
+            iaq_x       <= ctl_iaq_s;
 
          end if;
 
@@ -291,6 +334,7 @@ begin
             memen_n_x   <= nop_n;
             dbin_x      <= nop;
             we_n_x      <= nop_n;
+            iaq_x       <= nop;
 
          end if;
 
